@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="./css/styles.css"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <title>Informes Acuario</title>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <h2 id="title">Informes</h2>
+
+      <div class="form-row">
+        <div class="field">
+          <label for="fleet">Flota</label>
+          <select id="fleet">
+            <option value="">Seleccione flota</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="period">Periodo</label>
+          <select id="period">
+            <option value="hoy" selected>Hoy</option>
+            <option value="ayer">Ayer</option>
+            <option value="7dias">Últimos 7 días</option>
+            <option value="mes">Este mes</option>
+            <option value="rango">Fecha desde/hasta</option>
+          </select>
+        </div>
+
+        <div class="field range hidden" id="rangePickerBox">
+          <label for="dateRange">Periodo</label>
+          <input id="dateRange" type="text" placeholder="Seleccione rango" />
+        </div>
+
+        <div>
+          <button id="btnSelect" class="btn btn-primary">SELECCIONAR</button>
+        </div>
+
+        <div class="actions-right">
+          <button id="btnPdf" class="btn btn-pdf hidden">PDF</button>
+          <button id="btnExcel" class="btn btn-excel hidden">EXCEL</button>
+        </div>
+      </div>
+
+      <div class="hint" id="hint">
+        Seleccione una flota y un periodo
+      </div>
+
+      <div id="reportTabs" class="report-tabs hidden">
+        <button class="report-tab active" data-report="speed">
+          Excesos de velocidad
+        </button>
+        <button class="report-tab" data-report="geofence">
+          Geocercas
+        </button>
+        <button class="report-tab" data-report="parking">
+          Estacionamientos
+        </button>
+        <button class="report-tab" data-report="engine_hours">
+          Horas de motor
+        </button>
+        <button class="report-tab" data-report="up_time">
+          Tiempo de subida
+        </button>
+        <button class="report-tab" data-report="down_time">
+          Tiempo de bajada
+        </button>
+      </div>
+
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/es.js"></script>
+  <script src="./js/script.js"></script>
+</body>
+</html>
