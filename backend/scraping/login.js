@@ -1,30 +1,64 @@
+const path = require("path");
+
 async function acceptCookieBotIfPresent(page) {
   const dialog = page.locator("#CybotCookiebotDialog");
   if ((await dialog.count()) === 0) return;
 
-  const accept = page.locator(
-    [
-      "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-      "#CybotCookiebotDialogBodyButtonAccept",
-      "button:has-text('Allow all')",
-      "button:has-text('Accept all')",
-      "button:has-text('Accept')",
-      "button:has-text('Aceptar todo')",
-      "button:has-text('Permitir todo')",
-      "button:has-text('Aceptar')",
-    ].join(", ")
-  ).first();
+  const accept = page
+    .locator(
+      [
+        "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+        "#CybotCookiebotDialogBodyButtonAccept",
+        "button:has-text('Allow all')",
+        "button:has-text('Accept all')",
+        "button:has-text('Accept')",
+        "button:has-text('Aceptar todo')",
+        "button:has-text('Permitir todo')",
+        "button:has-text('Aceptar')",
+      ].join(", ")
+    )
+    .first();
 
   if ((await accept.count()) > 0) {
     await accept.click().catch(async () => accept.click({ force: true }));
     await dialog.first().waitFor({ state: "hidden", timeout: 8000 }).catch(() => {});
   } else {
-    await page.evaluate(() => {
-      const el = document.querySelector("#CybotCookiebotDialog");
-      if (el) el.style.display = "none";
-      document.body.style.overflow = "auto";
-    }).catch(() => {});
+    await page
+      .evaluate(() => {
+        const el = document.querySelector("#CybotCookiebotDialog");
+        if (el) el.style.display = "none";
+        document.body.style.overflow = "auto";
+      })
+      .catch(() => {});
   }
+}
+
+async function isLoginPage(page) {
+  const url = page.url();
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  const txt = String(bodyText || "").toUpperCase();
+
+  return (
+    url.includes("login") ||
+    txt.includes("ADMIN LOGIN") ||
+    txt.includes("STAY LOGGED IN") ||
+    txt.includes("FORGOT PASSWORD")
+  );
+}
+
+async function findFirst(page, selectors) {
+  for (const sel of selectors) {
+    const loc = page.locator(sel);
+    if ((await loc.count()) > 0) return loc.first();
+  }
+  return null;
+}
+
+async function saveAuth(page) {
+  await page.context().storageState({
+    path: path.join(__dirname, "..", "auth.json"),
+  });
+  console.log("auth.json actualizado");
 }
 
 async function login(page) {
@@ -36,27 +70,22 @@ async function login(page) {
     throw new Error("Faltan MAPON_USER / MAPON_PASS en .env");
   }
 
-  const targetUrl = `${baseUrl}/partner/client_list/`;
-
-  const findFirst = async (selectors) => {
-    for (const sel of selectors) {
-      const loc = page.locator(sel);
-      if ((await loc.count()) > 0) return loc.first();
-    }
-    return null;
-  };
+  const targetUrl = `${baseUrl}/partner/`;
 
   await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(1500);
+
   console.log("URL after goto target:", page.url());
 
-  // Si ya estás autenticado y entraste a partner, salir
-  if (page.url().includes("/partner/") && !page.url().includes("login")) {
+  if (!(await isLoginPage(page))) {
+    await saveAuth(page);
     return;
   }
 
   await acceptCookieBotIfPresent(page);
 
-  const userInput = await findFirst([
+  const userInput = await findFirst(page, [
     'input[autocomplete="username"]',
     'input[type="email"]',
     'input[name="email"]',
@@ -68,7 +97,7 @@ async function login(page) {
     'input[placeholder*="Username" i]',
   ]);
 
-  const passInput = await findFirst([
+  const passInput = await findFirst(page, [
     'input[autocomplete="current-password"]',
     'input[type="password"]',
     'input[name="password"]',
@@ -77,6 +106,7 @@ async function login(page) {
   ]);
 
   if (!userInput || !passInput) {
+    await page.screenshot({ path: "login-debug.png", fullPage: true }).catch(() => {});
     throw new Error(`No encontré inputs de login. URL: ${page.url()}`);
   }
 
@@ -89,14 +119,14 @@ async function login(page) {
   await passInput.pressSequentially(pass, { delay: 50 });
 
   const typedUser = await userInput.inputValue().catch(() => "");
-  const typedPassLen = await passInput.inputValue().then(v => v.length).catch(() => 0);
+  const typedPassLen = await passInput.inputValue().then((v) => v.length).catch(() => 0);
 
   console.log("typed user:", typedUser);
   console.log("typed pass length:", typedPassLen);
 
   await acceptCookieBotIfPresent(page);
 
-  const loginBtn = await findFirst([
+  const loginBtn = await findFirst(page, [
     "button#login",
     'button[name="login"]',
     'button[type="submit"]',
@@ -109,54 +139,58 @@ async function login(page) {
   ]);
 
   if (!loginBtn) {
+    await page.screenshot({ path: "login-debug.png", fullPage: true }).catch(() => {});
     throw new Error("No encontré botón de login");
   }
 
-  // Primero intenta Enter en password
   await Promise.all([
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
-    passInput.press("Enter").catch(() => {})
+    passInput.press("Enter").catch(() => {}),
   ]);
 
   await page.waitForTimeout(2000);
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  // Si sigue en login, intenta click al botón
-  if (page.url().includes("login")) {
+  if (await isLoginPage(page)) {
     await Promise.all([
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
-      loginBtn.click().catch(async () => loginBtn.click({ force: true }))
+      loginBtn.click().catch(async () => loginBtn.click({ force: true })),
     ]);
   }
 
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
   await page.waitForLoadState("networkidle").catch(() => {});
 
   console.log("URL after login submit:", page.url());
 
-  // Fallback: submit manual del form si aún sigue en login
-  if (page.url().includes("login")) {
-    await page.evaluate(() => {
-      const form = document.querySelector("form");
-      if (form) form.submit();
-    }).catch(() => {});
+  if (await isLoginPage(page)) {
+    await page
+      .evaluate(() => {
+        const form = document.querySelector("form");
+        if (form) form.submit();
+      })
+      .catch(() => {});
 
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(2500);
     await page.waitForLoadState("networkidle").catch(() => {});
   }
 
-  // Probar acceso real a partner otra vez
   await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForLoadState("networkidle").catch(() => {});
   await page.waitForTimeout(1500);
 
-  console.log("URL after login -> target:", page.url());
+  const bodyText = await page.locator("body").innerText().catch(() => "");
 
-  // Si no termina en partner, el login no quedó
-  if (!page.url().includes("/partner/")) {
-    const html = await page.locator("body").innerText().catch(() => "");
-    console.log("LOGIN PAGE TEXT SAMPLE:", (html || "").slice(0, 1000));
+  console.log("URL after login -> target:", page.url());
+  console.log("LOGIN PAGE TEXT SAMPLE:", String(bodyText || "").slice(0, 2000));
+
+  await page.screenshot({ path: "login-debug.png", fullPage: true }).catch(() => {});
+
+  if (await isLoginPage(page)) {
     throw new Error(`Login no se completó. URL: ${page.url()}`);
   }
+
+  await saveAuth(page);
 }
 
 module.exports = { login };

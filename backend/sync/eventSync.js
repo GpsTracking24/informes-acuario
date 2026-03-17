@@ -113,9 +113,7 @@ async function eventSyncAll() {
     context = await newContext(browser);
     page = await context.newPage();
 
-    if (!context._options?.storageState) {
-      await login(page);
-    }
+    await login(page);
 
     console.log("[eventSyncAll] placas activas:", plates.length);
 

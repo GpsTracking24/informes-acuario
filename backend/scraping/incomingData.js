@@ -1,41 +1,7 @@
 const { parseGps } = require("./parsers");
 const { reverseGeocode } = require("./geocode");
 const { getValidEventCodes } = require("../db/eventTypes");
-
-async function setLatestLogFile(page) {
-  const select = page.locator('select[name="logFileID"]').first();
-
-  if ((await select.count()) === 0) {
-    throw new Error("No encontré select[name='logFileID']");
-  }
-
-  const values = await select.locator("option").evaluateAll((opts) =>
-    opts.map((o) => (o.value || "").trim()).filter(Boolean)
-  );
-
-  console.log("[DEBUG] opciones disponibles:", values);
-
-  if (!values.length) {
-    throw new Error("logFileID no tiene opciones");
-  }
-
-  const chosen = values.length > 1 ? values[1] : values[0];
-
-  await select.selectOption(chosen);
-
-  await page.evaluate((value) => {
-    const el = document.querySelector('select[name="logFileID"]');
-    if (!el) return;
-    el.value = value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  }, chosen);
-
-  await page.waitForTimeout(500);
-
-  const selectedValue = await select.inputValue().catch(() => "");
-  console.log("[DEBUG] logFileID seteado a:", selectedValue);
-}
+const { login } = require("./login");
 
 function normalizeDateISO(d) {
   if (!d) return "";
@@ -108,14 +74,18 @@ function mapMaponEventToInternalCode(eventId, inputsText, validCodes) {
   return null;
 }
 
-async function fetchIncomingRowsCurrentSelection(page, uniqueId, logFileID) {
+async function ensureSession(page) {
+  const baseUrl = process.env.BASE_URL || "https://mapon.com";
+  await login(page, `${baseUrl}/partner/`);
+}
 
+async function fetchIncomingRowsDirect(page, uniqueId, logFileID) {
   const response = await page.request.post(
     "https://mapon.com/partner/ajax.php?module=incoming_data&sub=load",
     {
       form: {
-        unique_id: uniqueId,
-        logFileID: logFileID,
+        unique_id: String(uniqueId),
+        logFileID: String(logFileID),
         keyword: "",
         decodeHex: "on",
         custom_time_zone: "0",
@@ -124,47 +94,59 @@ async function fetchIncomingRowsCurrentSelection(page, uniqueId, logFileID) {
         box_model: "CALAMP",
         method: "data",
         type: "json",
-        sort: ""
-      }
+        sort: "",
+      },
+      headers: {
+        Accept: "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+      },
     }
   );
 
   const raw = await response.text();
 
-  console.log("[DEBUG] respuesta ajax preview:", raw.slice(0,300));
+  console.log("[DEBUG] ajax status:", response.status());
+  console.log("[DEBUG] ajax content-type:", response.headers()["content-type"] || "");
+  console.log(
+    "[DEBUG] ajax postData:",
+    `unique_id=${uniqueId}&logFileID=${logFileID}&keyword=&decodeHex=on&custom_time_zone=0&model=CALAMP&data_timezone=America/Lima&box_model=CALAMP&method=data&type=json&sort=`
+  );
+  console.log("[DEBUG] ajax raw:", raw.slice(0, 500));
 
   const json = JSON.parse(raw);
-
   const rows = Array.isArray(json?.data) ? json.data : [];
+
+  if (
+    rows.length === 1 &&
+    Array.isArray(rows[0]?.els) &&
+    rows[0].els.some((c) => String(c?.text || "").includes("No results")) 
+  ) {
+    return [];
+  }
+
+  if (
+    rows.length === 1 &&
+    Array.isArray(rows[0]?.els) &&
+    rows[0].els.some((c) => String(c?.text || "").includes("Box no found"))
+  ) {
+    return [];
+  }
 
   console.log("[DEBUG] filas recibidas:", rows.length);
 
-  return rows.map(row => {
+  return rows.map((row) => {
     const els = Array.isArray(row?.els) ? row.els : [];
     return els.map(extractCellText);
   });
 }
 
 async function generateReportForDevice({ page, plateId, placa, uniqueId, desde, hasta }) {
-  const baseUrl = process.env.BASE_URL;
-  const incomingUrl = `${baseUrl}/partner/incoming_data/?box_model=CALAMP&unique_id=${uniqueId}`;
+  await ensureSession(page);
 
-  await page.goto(incomingUrl, { waitUntil: "domcontentloaded" });
-  await page.waitForLoadState("networkidle").catch(() => {});
-  await page.waitForTimeout(2000);
-  await setLatestLogFile(page);
+  const logFileID = normalizeDateISO(hasta) || new Date().toISOString().slice(0, 10);
+  console.log(`[${placa}] usando logFileID:`, logFileID);
 
-  if (page.url().includes("login")) {
-    throw new Error(`Sesión no válida para ${placa}`);
-  }
-
-  const logFileID = await page.locator('select[name="logFileID"]').inputValue();
-
-const allRows = await fetchIncomingRowsCurrentSelection(
-  page,
-  uniqueId,
-  logFileID
-);
+  const allRows = await fetchIncomingRowsDirect(page, uniqueId, logFileID);
   const validCodes = await getValidEventCodes();
 
   const IDX_CREATED = 0;
@@ -194,25 +176,25 @@ const allRows = await fetchIncomingRowsCurrentSelection(
 
     let address = null;
 
-if (gps.lat != null && gps.lon != null) {
-  try {
-    address = await reverseGeocode(gps.lat, gps.lon);
-  } catch (err) {
-    console.warn(`[${placa}] reverseGeocode error:`, err.message);
-  }
-}
+    if (gps.lat != null && gps.lon != null) {
+      try {
+        address = await reverseGeocode(gps.lat, gps.lon);
+      } catch (err) {
+        console.warn(`[${placa}] reverseGeocode error:`, err.message);
+      }
+    }
 
-out.push({
-  plate_id: plateId,
-  code_event: codeEvent,
-  event_time: eventTime,
-  speed: gps.speed_kmh != null ? gps.speed_kmh : 0,
-  lat: gps.lat != null ? gps.lat : null,
-  lng: gps.lon != null ? gps.lon : null,
-  location: address || (gps.lat != null && gps.lon != null ? `${gps.lat}, ${gps.lon}` : null),
-  event_text: inputsText ? String(inputsText).trim() : null,
-  created_at: createdAt || null,
-});
+    out.push({
+      plate_id: plateId,
+      code_event: codeEvent,
+      event_time: eventTime,
+      speed: gps.speed_kmh != null ? gps.speed_kmh : 0,
+      lat: gps.lat != null ? gps.lat : null,
+      lng: gps.lon != null ? gps.lon : null,
+      location: address || (gps.lat != null && gps.lon != null ? `${gps.lat}, ${gps.lon}` : null),
+      event_text: inputsText ? String(inputsText).trim() : null,
+      created_at: createdAt || null,
+    });
   }
 
   return { rows: out };
