@@ -1,8 +1,4 @@
-node_modules/
 .env
 auth.json
-backend/scraping/cache.sqlite
-debug-login.png
-
-*.log
-*.tmp
+node_modules/
+*.sqlite

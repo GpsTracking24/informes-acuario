@@ -15,6 +15,7 @@ const state = {
 };
 
 let rangePicker = null;
+let activeRequestId = 0;
 
 let selectedRange = {
   desde: "",
@@ -68,6 +69,72 @@ function showRangeInputs(show) {
     .classList.toggle("hidden", !show);
 }
 
+function showDownloads(show) {
+  const el = document.getElementById("exportActions");
+  el.style.display = show ? "flex" : "none";
+}
+
+function hideTabs() {
+  document.getElementById("reportTabs").classList.add("hidden");
+}
+
+function showTabs() {
+  document.getElementById("reportTabs").classList.remove("hidden");
+}
+
+function clearResult() {
+  document.getElementById("result").innerHTML = "";
+}
+
+function resetView() {
+  hideTabs();
+  showDownloads(false);
+  clearResult();
+  setHint("");
+}
+
+function renderLoadingState(title, subtitle) {
+  document.getElementById("result").innerHTML = `
+    <div class="report-loading">
+      <div class="report-loading-head">
+        <div class="loader-spinner"></div>
+        <div>
+          <div class="report-loading-title">${escapeHtml(title)}</div>
+          <div class="report-loading-subtitle">${escapeHtml(subtitle)}</div>
+        </div>
+      </div>
+
+      <div class="table-skeleton">
+        <div class="table-skeleton-header">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="table-skeleton-row">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="table-skeleton-row">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="table-skeleton-row">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function startLoading(message = "Cargando informe...") {
+  hideTabs();
+  showDownloads(false);
+  setHint("");
+  renderLoadingState(message, "Consultando datos disponibles...");
+}
+
+function startTabLoading(message = "Cargando reporte...") {
+  showDownloads(false);
+  setHint("");
+  renderLoadingState(message, "Estamos preparando la información de la flota seleccionada.");
+}
+
 function getDateRange() {
   const period = document.getElementById("period").value;
   const now = new Date();
@@ -94,7 +161,7 @@ function getDateRange() {
 
   if (period === "mes") {
     const end = todayLocalISO(now);
-    const start = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-01`;
+    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
     return { desde: start, hasta: end };
   }
 
@@ -107,21 +174,19 @@ function getDateRange() {
 function initRangePicker() {
   rangePicker = flatpickr("#dateRange", {
     mode: "range",
-    dateFormat: "d.m.Y",
+    dateFormat: "d/m/Y",
     locale: "es",
 
     onClose(selectedDates) {
       if (selectedDates.length === 2) {
-
         const desde = selectedDates[0];
         const hasta = selectedDates[1];
 
         selectedRange.desde =
-          `${desde.getFullYear()}-${String(desde.getMonth()+1).padStart(2,"0")}-${String(desde.getDate()).padStart(2,"0")}`;
+          `${desde.getFullYear()}-${String(desde.getMonth() + 1).padStart(2, "0")}-${String(desde.getDate()).padStart(2, "0")}`;
 
         selectedRange.hasta =
-          `${hasta.getFullYear()}-${String(hasta.getMonth()+1).padStart(2,"0")}-${String(hasta.getDate()).padStart(2,"0")}`;
-
+          `${hasta.getFullYear()}-${String(hasta.getMonth() + 1).padStart(2, "0")}-${String(hasta.getDate()).padStart(2, "0")}`;
       } else {
         selectedRange.desde = "";
         selectedRange.hasta = "";
@@ -177,13 +242,17 @@ function activateTab(reportType) {
   state.activeReport = reportType;
 
   document.querySelectorAll(".report-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.report === reportType);
+    const isActive = btn.dataset.report === reportType;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
   });
 
   updateTitle();
 }
 
-async function getAvailableReports(fleetId, desde, hasta) {
+async function getReportsData(fleetId, desde, hasta) {
+  const requestId = ++activeRequestId;
+
   const reportTypes = [
     "speed",
     "geofence",
@@ -203,22 +272,30 @@ async function getAvailableReports(fleetId, desde, hasta) {
         const resp = await fetch(url);
         const data = await resp.json();
 
+        const rows = Array.isArray(data.plates) ? data.plates : [];
+
         return {
+          requestId,
           reportType,
           ok: !!data.ok,
-          count: Array.isArray(data.plates) ? data.plates.length : 0,
+          rows,
         };
       } catch {
         return {
+          requestId,
           reportType,
           ok: false,
-          count: 0,
+          rows: [],
         };
       }
     })
   );
 
-  return results.filter((r) => r.ok && r.count > 0).map((r) => r.reportType);
+  if (requestId !== activeRequestId) {
+    return null;
+  }
+
+  return results;
 }
 
 function updateVisibleTabs(availableReports) {
@@ -624,15 +701,15 @@ async function onToggleDetails(e, desde, hasta) {
     b.textContent = "-";
     b.setAttribute("data-open", "1");
 
-   let colspan = 6;
+    let colspan = 6;
 
-if (reportType === "parking") {
-  colspan = 8;
-} else if (reportType === "up_time" || reportType === "down_time") {
-  colspan = 12;
-} else if (reportType === "geofence") {
-  colspan = 10;
-}
+    if (reportType === "parking") {
+      colspan = 8;
+    } else if (reportType === "up_time" || reportType === "down_time") {
+      colspan = 12;
+    } else if (reportType === "geofence") {
+      colspan = 10;
+    }
 
     const loading = document.createElement("tr");
     loading.className = "detail-row";
@@ -740,25 +817,25 @@ if (reportType === "parking") {
 
     const placa = tr.querySelector(".col-placa")?.innerText?.trim() || "";
 
-const rowsHtml = (data.events || [])
-  .map((ev) => {
-    const fecha = fmtDT(ev.event_time);
-    const texto = `GENERÓ UN ${ev.evento}, VELOCIDAD = ${ev.speed ?? 0} km/h, FECHA: ${fecha}`;
+    const rowsHtml = (data.events || [])
+      .map((ev) => {
+        const fecha = fmtDT(ev.event_time);
+        const texto = `GENERÓ UN ${ev.evento}, VELOCIDAD = ${ev.speed ?? 0} km/h, FECHA: ${fecha}`;
 
-    return `
-      <tr class="detail-row" data-parent="${plateId}">
-        <td class="col-btn"></td>
-        <td class="col-placa nowrap"><b>${escapeHtml(placa)}</b></td>
-        <td class="col-fecha nowrap">${escapeHtml(fecha)}</td>
-        <td class="col-texto">${escapeHtml(texto)}</td>
-        <td class="col-loc">${escapeHtml(ev.location || "")}</td>
-        <td class="col-cant nowrap">1</td>
-      </tr>
-    `;
-  })
-  .join("");
+        return `
+          <tr class="detail-row" data-parent="${plateId}">
+            <td class="col-btn"></td>
+            <td class="col-placa nowrap"><b>${escapeHtml(placa)}</b></td>
+            <td class="col-fecha nowrap">${escapeHtml(fecha)}</td>
+            <td class="col-texto">${escapeHtml(texto)}</td>
+            <td class="col-loc">${escapeHtml(ev.location || "")}</td>
+            <td class="col-cant nowrap">1</td>
+          </tr>
+        `;
+      })
+      .join("");
 
-tr.insertAdjacentHTML("afterend", rowsHtml);
+    tr.insertAdjacentHTML("afterend", rowsHtml);
   } catch (err) {
     const errRow = document.createElement("tr");
     errRow.className = "detail-row";
@@ -788,6 +865,7 @@ tr.insertAdjacentHTML("afterend", rowsHtml);
 
 // -------------------- GENERATE --------------------
 async function loadActiveReport() {
+  const requestId = ++activeRequestId;
   const { fleetId, desde, hasta, activeReport } = state;
 
   const url = `${API_REPORT_PLATES}?report_type=${encodeURIComponent(
@@ -796,11 +874,16 @@ async function loadActiveReport() {
 
   const resp = await fetch(url);
   const data = await resp.json();
+
+  if (requestId !== activeRequestId) return;
+
   if (!data.ok) throw new Error(data.error || "Error generando reporte");
 
+  const rows = Array.isArray(data.plates) ? data.plates : [];
+
   setHint("");
-  renderPlates(data.plates, desde, hasta, activeReport);
-  showDownloads(true);
+  renderPlates(rows, desde, hasta, activeReport);
+  showDownloads(rows.length > 0);
 }
 
 async function onGenerate() {
@@ -819,45 +902,74 @@ async function onGenerate() {
     state.loaded = true;
 
     showDownloads(false);
-    document.getElementById("result").innerHTML = "";
-    setHint("Cargando informes...");
+    startLoading("Cargando informe...");
 
-    const availableReports = await getAvailableReports(fleetId, desde, hasta);
+    const reportsData = await getReportsData(fleetId, desde, hasta);
+    if (!reportsData) return;
+
+    const availableReports = reportsData
+      .filter((r) => r.ok && r.rows.length > 0)
+      .map((r) => r.reportType);
 
     updateVisibleTabs(availableReports);
 
     if (!availableReports.length) {
-      setHint("");
+      hideTabs();
+      showDownloads(false);
+      clearResult();
       document.getElementById("result").innerHTML = "<p>No hay datos para mostrar en ese rango.</p>";
       return;
     }
 
-    if (!availableReports.includes(state.activeReport)) {
-      state.activeReport = availableReports[0];
-    }
+    const firstAvailableReport = availableReports.includes(state.activeReport)
+      ? state.activeReport
+      : availableReports[0];
 
-    activateTab(state.activeReport);
-    await loadActiveReport();
+    const selectedReportData = reportsData.find(
+      (r) => r.reportType === firstAvailableReport
+    );
+
+    activateTab(firstAvailableReport);
+    showTabs();
+    setHint("");
+
+    renderPlates(
+      selectedReportData.rows,
+      state.desde,
+      state.hasta,
+      firstAvailableReport
+    );
+
+    showDownloads(selectedReportData.rows.length > 0);
   } catch (e) {
     console.error(e);
     setHint(e.message || "Error", true);
+    hideTabs();
     showDownloads(false);
+    clearResult();
   }
 }
 
 async function onTabClick(e) {
   const reportType = e.currentTarget.dataset.report;
-  activateTab(reportType);
 
-  if (!state.loaded) return;
+  if (!state.loaded) {
+    activateTab(reportType);
+    return;
+  }
+
+  if (reportType === state.activeReport) return;
 
   try {
-    setHint("Cargando reporte...");
+    activateTab(reportType);
+    showTabs();
+    startTabLoading("Cargando reporte...");
     await loadActiveReport();
   } catch (e) {
     console.error(e);
     setHint(e.message || "Error", true);
     showDownloads(false);
+    clearResult();
   }
 }
 
@@ -871,11 +983,6 @@ function downloadBlob(blob, filename) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-}
-
-function showDownloads(show) {
-  document.getElementById("btnPdf").classList.toggle("hidden", !show);
-  document.getElementById("btnExcel").classList.toggle("hidden", !show);
 }
 
 async function downloadFile(kind) {
@@ -924,8 +1031,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   showRangeInputs(document.getElementById("period").value === "rango");
 
   updateTitle();
+  hideTabs();
   showDownloads(false);
   setHint("");
+  clearResult();
+  document.body.classList.remove("preload");
+
+  document.getElementById("fleet").addEventListener("change", () => {
+    resetView();
+    state.loaded = false;
+    activeRequestId++;
+  });
 
   document.getElementById("period").addEventListener("change", (e) => {
     const isRange = e.target.value === "rango";
@@ -938,6 +1054,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       if (rangePicker) rangePicker.clear();
     }
+
+    resetView();
+    state.loaded = false;
+    activeRequestId++;
   });
 
   document.getElementById("btnSelect").addEventListener("click", onGenerate);
